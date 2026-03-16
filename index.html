@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MotoRoute - GPX Route Toolkit for motorcyclists">
+  <title>MotoRoute — GPX Route Toolkit</title>
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin="" />
+  
+  <!-- App CSS -->
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/responsive.css">
+</head>
+<body>
+  <a href="#map" class="skip-link">Skip to map</a>
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar" role="complementary">
+      <header class="sidebar-header">
+        <div>
+          <h1>MotoRoute</h1>
+          <p class="subtitle">GPX Route Toolkit</p>
+        </div>
+        <button class="sidebar-toggle" aria-label="Toggle sidebar" aria-expanded="true">
+          <span class="sidebar-toggle-icon">▲</span>
+        </button>
+      </header>
+      
+      <section class="sidebar-section" aria-label="Import GPX file">
+        <h2>Import Route</h2>
+        <file-import></file-import>
+      </section>
+      
+      <section class="sidebar-section" id="recent-section" style="display: none;" aria-label="Recent routes">
+        <h2>Recent Routes</h2>
+        <div id="recent-routes-list" class="recent-routes-list"></div>
+      </section>
+      
+      <section class="sidebar-section" id="stats-section" style="display: none;" aria-label="Route statistics">
+        <h2>Route Stats</h2>
+        <route-stats></route-stats>
+      </section>
+      
+      <section class="sidebar-section" id="editor-section" style="display: none;" aria-label="Route editing tools">
+        <h2>Edit Route</h2>
+        <route-editor></route-editor>
+      </section>
+      
+      <section class="sidebar-section" id="tile-section" aria-label="Map style selection">
+        <h2>Map Style</h2>
+        <tile-switcher></tile-switcher>
+      </section>
+    </aside>
+    
+    <!-- Main Content -->
+    <main class="main-content" role="main">
+      <div class="loading-overlay" id="loading-overlay" style="display: none;">
+        <div class="loading-spinner"></div>
+        <span class="loading-text">Loading route...</span>
+      </div>
+      <gpx-map id="map"></gpx-map>
+      <elevation-chart></elevation-chart>
+    </main>
+  </div>
+  
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""></script>
+  
+  <!-- App JS (ES Module) -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
