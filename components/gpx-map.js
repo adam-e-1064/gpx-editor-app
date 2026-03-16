@@ -14,6 +14,7 @@ class GpxMap extends HTMLElement {
     this.currentTileLayer = null;
     this.allPoints = []; // Store all route points for highlighting
     this.editMarkers = []; // Store edit markers
+    this.anchors = []; // Store anchor points for routing
     this.isEditing = false;
     this.splitMode = false;
     this.splitMarker = null; // Store split preview marker
@@ -107,8 +108,17 @@ class GpxMap extends HTMLElement {
         const latlng = e.latlng;
         const index = this.findNearestPointIndex(this.allPoints, latlng);
         
+        // Find which segment (between which anchors) was clicked
+        let afterAnchorIndex = 0;
+        for (let i = 0; i < this.anchors.length - 1; i++) {
+          if (index >= this.anchors[i].originalIndex && index < this.anchors[i + 1].originalIndex) {
+            afterAnchorIndex = i;
+            break;
+          }
+        }
+        
         document.dispatchEvent(new CustomEvent('waypoint-added', {
-          detail: { index, lat: latlng.lat, lng: latlng.lng }
+          detail: { afterAnchorIndex, lat: latlng.lat, lng: latlng.lng }
         }));
       }
     });
@@ -298,23 +308,50 @@ class GpxMap extends HTMLElement {
   
   /**
    * Enable editing mode - make waypoints draggable and allow click-to-add
+   * Edit markers become anchor points for routing
    */
   enableEditing() {
     if (this.isEditing || this.allPoints.length === 0) return;
     
     this.isEditing = true;
     
-    // Sample points for large routes (max ~100 editable markers)
+    // Build anchors array from sampled points
+    // First and last points are always anchors
+    this.anchors = [];
     const totalPoints = this.allPoints.length;
     const maxMarkers = 100;
     const step = totalPoints > maxMarkers ? Math.floor(totalPoints / maxMarkers) : 1;
     
-    // Create draggable markers
-    for (let i = 0; i < totalPoints; i += step) {
-      const actualIndex = i;
-      const point = this.allPoints[actualIndex];
-      
-      const marker = L.circleMarker([point.lat, point.lng], {
+    // Always include first point as anchor
+    this.anchors.push({
+      lat: this.allPoints[0].lat,
+      lng: this.allPoints[0].lng,
+      originalIndex: 0
+    });
+    
+    // Sample intermediate points (skip first and last)
+    for (let i = step; i < totalPoints - 1; i += step) {
+      const point = this.allPoints[i];
+      this.anchors.push({
+        lat: point.lat,
+        lng: point.lng,
+        originalIndex: i
+      });
+    }
+    
+    // Always include last point as anchor
+    if (totalPoints > 1) {
+      const lastIndex = totalPoints - 1;
+      this.anchors.push({
+        lat: this.allPoints[lastIndex].lat,
+        lng: this.allPoints[lastIndex].lng,
+        originalIndex: lastIndex
+      });
+    }
+    
+    // Create draggable markers for each anchor
+    this.anchors.forEach((anchor, anchorIndex) => {
+      const marker = L.circleMarker([anchor.lat, anchor.lng], {
         radius: 6,
         fillColor: '#2563eb',
         color: '#ffffff',
@@ -327,46 +364,61 @@ class GpxMap extends HTMLElement {
       // Make marker interactive for dragging
       marker.on('mousedown', (e) => {
         L.DomEvent.stopPropagation(e);
-        this.startDragging(marker, actualIndex);
+        this.startDragging(marker, anchorIndex);
       });
       
-      // Right-click or long-press to remove
+      // Right-click or long-press to remove (but not first or last)
       marker.on('contextmenu', (e) => {
         L.DomEvent.preventDefault(e);
         L.DomEvent.stopPropagation(e);
         
+        // Don't allow removing first or last anchor
+        if (anchorIndex === 0 || anchorIndex === this.anchors.length - 1) {
+          return;
+        }
+        
         document.dispatchEvent(new CustomEvent('waypoint-removed', {
-          detail: { index: actualIndex }
+          detail: { anchorIndex }
         }));
       });
       
-      this.editMarkers.push({ marker, actualIndex });
+      this.editMarkers.push({ marker, anchorIndex });
       this.routeLayer.addLayer(marker);
-    }
+    });
   }
   
   /**
-   * Start dragging a marker
+   * Start dragging a marker (anchor point)
    * @param {L.CircleMarker} marker
-   * @param {number} actualIndex
+   * @param {number} anchorIndex - Index in the anchors array
    */
-  startDragging(marker, actualIndex) {
+  startDragging(marker, anchorIndex) {
     const map = this.map;
+    const originalIndex = this.anchors[anchorIndex].originalIndex;
     
     const onMouseMove = (e) => {
       marker.setLatLng(e.latlng);
-      // Update polyline with new position
-      this.updatePolylinePoint(actualIndex, e.latlng);
+      // Update polyline with new position for immediate visual feedback
+      this.updatePolylinePoint(originalIndex, e.latlng);
     };
     
     const onMouseUp = (e) => {
       map.off('mousemove', onMouseMove);
       map.off('mouseup', onMouseUp);
       
-      // Dispatch waypoint-moved event
+      // Dispatch waypoint-moved event with anchor context
       const latlng = marker.getLatLng();
+      const prevAnchor = anchorIndex > 0 ? this.anchors[anchorIndex - 1] : null;
+      const nextAnchor = anchorIndex < this.anchors.length - 1 ? this.anchors[anchorIndex + 1] : null;
+      
       document.dispatchEvent(new CustomEvent('waypoint-moved', {
-        detail: { index: actualIndex, lat: latlng.lat, lng: latlng.lng }
+        detail: {
+          anchorIndex,
+          lat: latlng.lat,
+          lng: latlng.lng,
+          prevAnchor: prevAnchor ? { lat: prevAnchor.lat, lng: prevAnchor.lng } : null,
+          nextAnchor: nextAnchor ? { lat: nextAnchor.lat, lng: nextAnchor.lng } : null
+        }
       }));
       
       // Re-enable map dragging
@@ -419,6 +471,7 @@ class GpxMap extends HTMLElement {
       this.routeLayer.removeLayer(marker);
     });
     this.editMarkers = [];
+    this.anchors = [];
   }
   
   /**
@@ -477,8 +530,17 @@ class GpxMap extends HTMLElement {
           const latlng = e.latlng;
           const index = this.findNearestPointIndex(this.allPoints, latlng);
           
+          // Find which segment (between which anchors) was clicked
+          let afterAnchorIndex = 0;
+          for (let i = 0; i < this.anchors.length - 1; i++) {
+            if (index >= this.anchors[i].originalIndex && index < this.anchors[i + 1].originalIndex) {
+              afterAnchorIndex = i;
+              break;
+            }
+          }
+          
           document.dispatchEvent(new CustomEvent('waypoint-added', {
-            detail: { index, lat: latlng.lat, lng: latlng.lng }
+            detail: { afterAnchorIndex, lat: latlng.lat, lng: latlng.lng }
           }));
         });
       } else {
@@ -516,6 +578,86 @@ class GpxMap extends HTMLElement {
     }).addTo(this.map);
     
     this.splitMarker.bindPopup('<b>Split Point</b>').openPopup();
+  }
+  
+  /**
+   * Update map with new routed points (called after OSRM routing)
+   * @param {TrackPoint[]} newPoints - New route points from routing
+   * @param {Array<{lat: number, lng: number}>} [updatedAnchors] - Updated anchors to preserve
+   */
+  updateFromRouting(newPoints, updatedAnchors) {
+    if (!newPoints || newPoints.length === 0) return;
+    
+    // Update allPoints with new routed points
+    this.allPoints = newPoints;
+    
+    // Rebuild polyline with new coordinates
+    const latLngs = newPoints.map(p => [p.lat, p.lng]);
+    if (this.polyline) {
+      this.polyline.setLatLngs(latLngs);
+    }
+    
+    // Refresh edit markers if in editing mode
+    if (this.isEditing && updatedAnchors) {
+      // Remove existing edit markers
+      this.editMarkers.forEach(({ marker }) => {
+        this.routeLayer.removeLayer(marker);
+      });
+      this.editMarkers = [];
+      
+      // Rebuild anchors from provided updated anchors
+      // Map each anchor to its nearest point in the new route
+      this.anchors = updatedAnchors.map(anchor => {
+        const nearestIndex = this.findNearestPointIndex(this.allPoints, { lat: anchor.lat, lng: anchor.lng });
+        return {
+          lat: anchor.lat,
+          lng: anchor.lng,
+          originalIndex: nearestIndex
+        };
+      });
+      
+      // Recreate edit markers for each anchor
+      this.anchors.forEach((anchor, anchorIndex) => {
+        const marker = L.circleMarker([anchor.lat, anchor.lng], {
+          radius: 6,
+          fillColor: '#2563eb',
+          color: '#ffffff',
+          weight: 2,
+          fillOpacity: 0.8,
+          className: 'edit-marker',
+          draggable: false
+        });
+        
+        marker.on('mousedown', (e) => {
+          L.DomEvent.stopPropagation(e);
+          this.startDragging(marker, anchorIndex);
+        });
+        
+        marker.on('contextmenu', (e) => {
+          L.DomEvent.preventDefault(e);
+          L.DomEvent.stopPropagation(e);
+          if (anchorIndex === 0 || anchorIndex === this.anchors.length - 1) return;
+          document.dispatchEvent(new CustomEvent('waypoint-removed', {
+            detail: { anchorIndex }
+          }));
+        });
+        
+        this.editMarkers.push({ marker, anchorIndex });
+        this.routeLayer.addLayer(marker);
+      });
+    }
+  }
+  
+  /**
+   * Get the current anchor points
+   * @returns {Array<{lat: number, lng: number, originalIndex: number}>} Copy of anchors array
+   */
+  getAnchors() {
+    return this.anchors.map(anchor => ({
+      lat: anchor.lat,
+      lng: anchor.lng,
+      originalIndex: anchor.originalIndex
+    }));
   }
 }
 

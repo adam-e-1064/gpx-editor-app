@@ -13,6 +13,7 @@ import { computeMetadata, reverseRoute, trimRoute, mergeRoutes, splitRoute } fro
 import { haversineDistance } from './geo-utils.js';
 import { exportGPX } from './gpx-export.js';
 import { saveRoute, loadRoute, getRecentRoutes, deleteRoute, savePreferences, loadPreferences } from './storage.js';
+import { recalculateSegments, interpolateElevations } from './routing.js';
 
 // Application state
 const state = {
@@ -22,6 +23,7 @@ const state = {
   preferences: {},
   editing: false,
   editingSnapshot: null,
+  originalEditPoints: null, // Store original points for elevation interpolation
   splitMode: false,
   splitRoutes: null
 };
@@ -202,6 +204,13 @@ function init() {
       if (routeEditor) routeEditor.setSplitMode(false);
     }
     
+    // Store original points for elevation interpolation when entering edit mode
+    if (state.editing && state.route) {
+      state.originalEditPoints = flattenAllPoints(state.route);
+    } else {
+      state.originalEditPoints = null;
+    }
+    
     if (gpxMap) {
       if (state.editing) {
         gpxMap.enableEditing();
@@ -344,90 +353,195 @@ function init() {
   // Listen for 
   
   // Listen for waypoint moved (from map editing)
-  document.addEventListener('waypoint-moved', (e) => {
-    if (!state.route) return;
+  document.addEventListener('waypoint-moved', async (e) => {
+    if (!state.route || !gpxMap) return;
     
-    const { index, lat, lng } = e.detail;
+    const { anchorIndex, lat, lng } = e.detail;
     
     // Save snapshot for undo (once per editing session)
     if (!state.editingSnapshot) {
       state.editingSnapshot = structuredClone(state.route);
     }
     
-    // Update point in state
-    updatePointInRoute(state.route, index, lat, lng);
+    // Show loading cursor during routing
+    document.body.style.cursor = 'wait';
     
-    // Recompute metadata
-    state.route.metadata = computeMetadata(state.route);
-    
-    // Update stats and chart (map already updated the polyline)
-    if (routeStats) {
-      routeStats.update(state.route.metadata);
-    }
-    
-    if (elevationChart) {
-      const hasElevation = state.route.tracks.some(t => 
-        t.segments.some(s => s.points.some(p => p.ele !== null))
-      );
+    try {
+      // Get anchors from map and update the moved anchor's position
+      const anchors = gpxMap.getAnchors();
+      anchors[anchorIndex].lat = lat;
+      anchors[anchorIndex].lng = lng;
       
-      if (hasElevation) {
-        const profileData = prepareElevationProfile(state.route);
-        elevationChart.loadProfile(profileData);
+      // Recalculate route through all anchors via OSRM
+      const routedPoints = await recalculateSegments(anchors);
+      
+      // Interpolate elevations from original route
+      const pointsWithElevation = interpolateElevations(routedPoints, state.originalEditPoints || []);
+      
+      // Replace route with new single-track/single-segment from routed points
+      state.route = {
+        ...state.route,
+        tracks: [{
+          name: state.route.tracks[0]?.name || '',
+          segments: [{ points: pointsWithElevation }]
+        }]
+      };
+      
+      // Recompute metadata
+      state.route.metadata = computeMetadata(state.route);
+      
+      // Update map with new routed points
+      gpxMap.updateFromRouting(pointsWithElevation, anchors);
+      
+      // Update stats and chart
+      if (routeStats) {
+        routeStats.update(state.route.metadata);
       }
-    }
-    
-    if (routeEditor) {
-      routeEditor.setUndoEnabled(true);
+      
+      if (elevationChart) {
+        const hasElevation = pointsWithElevation.some(p => p.ele !== null);
+        
+        if (hasElevation) {
+          const profileData = prepareElevationProfile(state.route);
+          elevationChart.loadProfile(profileData);
+        }
+      }
+      
+      if (routeEditor) {
+        routeEditor.setUndoEnabled(true);
+      }
+    } catch (error) {
+      console.error('Routing failed:', error);
+    } finally {
+      document.body.style.cursor = '';
     }
   });
   
   // Listen for waypoint added
-  document.addEventListener('waypoint-added', (e) => {
-    if (!state.route) return;
+  document.addEventListener('waypoint-added', async (e) => {
+    if (!state.route || !gpxMap) return;
     
-    const { index, lat, lng } = e.detail;
+    const { afterAnchorIndex, lat, lng } = e.detail;
     
     // Save snapshot for undo
     if (!state.editingSnapshot) {
       state.editingSnapshot = structuredClone(state.route);
     }
     
-    // Insert point in route
-    insertPointInRoute(state.route, index, lat, lng);
+    // Show loading cursor during routing
+    document.body.style.cursor = 'wait';
     
-    // Recompute metadata
-    state.route.metadata = computeMetadata(state.route);
-    
-    // Re-render everything (need to add new edit marker)
-    refreshAllComponents();
-    
-    if (routeEditor) {
-      routeEditor.setUndoEnabled(true);
+    try {
+      // Get anchors from map and insert new anchor after afterAnchorIndex
+      const anchors = gpxMap.getAnchors();
+      anchors.splice(afterAnchorIndex + 1, 0, { lat, lng, originalIndex: -1 });
+      
+      // Recalculate route through all anchors via OSRM
+      const routedPoints = await recalculateSegments(anchors);
+      
+      // Interpolate elevations from original route
+      const pointsWithElevation = interpolateElevations(routedPoints, state.originalEditPoints || []);
+      
+      // Replace route with new single-track/single-segment from routed points
+      state.route = {
+        ...state.route,
+        tracks: [{
+          name: state.route.tracks[0]?.name || '',
+          segments: [{ points: pointsWithElevation }]
+        }]
+      };
+      
+      // Recompute metadata
+      state.route.metadata = computeMetadata(state.route);
+      
+      // Update map with new routed points
+      gpxMap.updateFromRouting(pointsWithElevation, anchors);
+      
+      // Update stats and chart
+      if (routeStats) {
+        routeStats.update(state.route.metadata);
+      }
+      
+      if (elevationChart) {
+        const hasElevation = pointsWithElevation.some(p => p.ele !== null);
+        
+        if (hasElevation) {
+          const profileData = prepareElevationProfile(state.route);
+          elevationChart.loadProfile(profileData);
+        }
+      }
+      
+      if (routeEditor) {
+        routeEditor.setUndoEnabled(true);
+      }
+    } catch (error) {
+      console.error('Routing failed:', error);
+    } finally {
+      document.body.style.cursor = '';
     }
   });
   
   // Listen for waypoint removed
-  document.addEventListener('waypoint-removed', (e) => {
-    if (!state.route) return;
+  document.addEventListener('waypoint-removed', async (e) => {
+    if (!state.route || !gpxMap) return;
     
-    const { index } = e.detail;
+    const { anchorIndex } = e.detail;
     
     // Save snapshot for undo
     if (!state.editingSnapshot) {
       state.editingSnapshot = structuredClone(state.route);
     }
     
-    // Remove point from route
-    removePointFromRoute(state.route, index);
+    // Show loading cursor during routing
+    document.body.style.cursor = 'wait';
     
-    // Recompute metadata
-    state.route.metadata = computeMetadata(state.route);
-    
-    // Re-render everything (need to remove edit marker)
-    refreshAllComponents();
-    
-    if (routeEditor) {
-      routeEditor.setUndoEnabled(true);
+    try {
+      // Get anchors from map and remove the anchor at anchorIndex
+      const anchors = gpxMap.getAnchors();
+      anchors.splice(anchorIndex, 1);
+      
+      // Recalculate route through remaining anchors via OSRM
+      const routedPoints = await recalculateSegments(anchors);
+      
+      // Interpolate elevations from original route
+      const pointsWithElevation = interpolateElevations(routedPoints, state.originalEditPoints || []);
+      
+      // Replace route with new single-track/single-segment from routed points
+      state.route = {
+        ...state.route,
+        tracks: [{
+          name: state.route.tracks[0]?.name || '',
+          segments: [{ points: pointsWithElevation }]
+        }]
+      };
+      
+      // Recompute metadata
+      state.route.metadata = computeMetadata(state.route);
+      
+      // Update map with new routed points
+      gpxMap.updateFromRouting(pointsWithElevation, anchors);
+      
+      // Update stats and chart
+      if (routeStats) {
+        routeStats.update(state.route.metadata);
+      }
+      
+      if (elevationChart) {
+        const hasElevation = pointsWithElevation.some(p => p.ele !== null);
+        
+        if (hasElevation) {
+          const profileData = prepareElevationProfile(state.route);
+          elevationChart.loadProfile(profileData);
+        }
+      }
+      
+      if (routeEditor) {
+        routeEditor.setUndoEnabled(true);
+      }
+    } catch (error) {
+      console.error('Routing failed:', error);
+    } finally {
+      document.body.style.cursor = '';
     }
   });
 }
@@ -618,80 +732,22 @@ function calculateDistanceAtIndex(routeData, targetIndex) {
 }
 
 /**
- * Update a point in the route data
+ * Flatten all points from a route data structure into a single array
  * @param {RouteData} routeData
- * @param {number} targetIndex
- * @param {number} lat
- * @param {number} lng
+ * @returns {TrackPoint[]} Flat array of all track points
  */
-function updatePointInRoute(routeData, targetIndex, lat, lng) {
-  let currentIndex = 0;
+function flattenAllPoints(routeData) {
+  const points = [];
   
-  for (const track of routeData.tracks) {
-    for (const segment of track.segments) {
-      for (let i = 0; i < segment.points.length; i++) {
-        if (currentIndex === targetIndex) {
-          segment.points[i].lat = lat;
-          segment.points[i].lng = lng;
-          return;
-        }
-        currentIndex++;
-      }
-    }
-  }
-}
-
-/**
- * Insert a new point in the route data
- * @param {RouteData} routeData
- * @param {number} targetIndex
- * @param {number} lat
- * @param {number} lng
- */
-function insertPointInRoute(routeData, targetIndex, lat, lng) {
-  let currentIndex = 0;
+  routeData.tracks.forEach(track => {
+    track.segments.forEach(segment => {
+      segment.points.forEach(point => {
+        points.push(point);
+      });
+    });
+  });
   
-  for (const track of routeData.tracks) {
-    for (const segment of track.segments) {
-      for (let i = 0; i < segment.points.length; i++) {
-        if (currentIndex === targetIndex) {
-          // Interpolate elevation from neighbors
-          const prevPoint = i > 0 ? segment.points[i - 1] : null;
-          const nextPoint = i < segment.points.length ? segment.points[i] : null;
-          let ele = null;
-          
-          if (prevPoint?.ele !== null && nextPoint?.ele !== null) {
-            ele = (prevPoint.ele + nextPoint.ele) / 2;
-          }
-          
-          segment.points.splice(i, 0, { lat, lng, ele, time: null });
-          return;
-        }
-        currentIndex++;
-      }
-    }
-  }
-}
-
-/**
- * Remove a point from the route data
- * @param {RouteData} routeData
- * @param {number} targetIndex
- */
-function removePointFromRoute(routeData, targetIndex) {
-  let currentIndex = 0;
-  
-  for (const track of routeData.tracks) {
-    for (const segment of track.segments) {
-      for (let i = 0; i < segment.points.length; i++) {
-        if (currentIndex === targetIndex) {
-          segment.points.splice(i, 1);
-          return;
-        }
-        currentIndex++;
-      }
-    }
-  }
+  return points;
 }
 
 // Initialize when DOM is ready
