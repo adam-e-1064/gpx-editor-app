@@ -1,40 +1,47 @@
-# Session Handoff — 2026-03-15
+# Session Handoff — 2026-03-16
 
 ## What Was Done
-- Phase 1: Scaffolding + GPX Import + Interactive Map (complete, reviewed, fixed)
-- Phase 2: Route Stats + Elevation Chart + Tile Switcher (complete, reviewed, fixed)
-- Agent generalization: 8 agents updated from React-specific to JS-ecosystem-generic
-- 7 project-specific skills created for MotoRoute
-- copilot-instructions.md updated for JS/TS web development
-- ADRs: 0001 (Web Components), 0002 (GPX Parser), 0003 (Leaflet), 0004 (Phase 2 Components)
+- Implemented OSRM road-following routing for route editing
+- Created `js/routing.js` — OSRM integration module
+- Updated `components/gpx-map.js` — anchor-based editing model
+- Updated `js/app.js` — async routing integration for move/add/remove
+- Fixed event format consistency bug in `disableSplitMode()`
+- Fixed anchor state preservation in `updateFromRouting()`
+- Added coordinate validation in routing module
+- Removed dead code (`updatePointInRoute`, `insertPointInRoute`, `removePointFromRoute`)
 
 ## Current State
-- Phases 1 and 2 are fully implemented and code-reviewed
-- App renders GPX routes on Leaflet map with markers and polyline
-- Route stats panel displays distance, elevation, time, point count
-- Interactive elevation chart with Canvas 2D (gradient fill, hover tooltip)
-- Bidirectional hover sync: chart ↔ map crosshair
-- Tile switcher: OSM, OpenTopoMap, CyclOSM
-- Responsive layout: desktop sidebar, tablet collapsible, mobile bottom sheet
-- All XSS vulnerabilities fixed, all critical bugs resolved
+- Phases 1-3 fully implemented
+- Route editing now recalculates road-following paths via OSRM
+- Edit markers are anchor points; dragging/adding/removing triggers OSRM routing
+- Elevation data preserved via nearest-point interpolation
+- Fallback to straight lines when OSRM unavailable
+- All previous features intact (import, map, stats, chart, tile switching, trim, merge, split, export, undo, localStorage)
 
 ### Files
 - `index.html` — page structure, Leaflet CDN
 - `css/styles.css`, `css/components.css`, `css/responsive.css`
-- `js/app.js` — orchestrator, state, event wiring
+- `js/app.js` — orchestrator, state, event wiring, async routing integration
 - `js/gpx-parser.js` — GPX XML → RouteData
-- `js/geo-utils.js` — Haversine distance
-- `js/route-utils.js` — route metadata computation
-- `components/file-import.js` — `<file-import>` drag & drop
-- `components/gpx-map.js` — `<gpx-map>` Leaflet map + tile switching
-- `components/route-stats.js` — `<route-stats>` stats display
-- `components/elevation-chart.js` — `<elevation-chart>` Canvas chart
-- `components/tile-switcher.js` — `<tile-switcher>` map layer selector
+- `js/gpx-export.js` — RouteData → GPX XML
+- `js/geo-utils.js` — Haversine distance, bearing
+- `js/route-utils.js` — reverse, trim, merge, split, metadata
+- `js/routing.js` — OSRM road routing (NEW)
+- `js/storage.js` — localStorage persistence
+- `components/file-import.js` — drag & drop GPX import
+- `components/gpx-map.js` — Leaflet map with anchor-based editing
+- `components/route-stats.js` — stats display
+- `components/elevation-chart.js` — Canvas elevation chart
+- `components/tile-switcher.js` — map layer selector
+- `components/route-editor.js` — edit controls UI
 
 ## Open Questions
-- None
+- OSRM demo server has no SLA — consider self-hosting or paid API for production
+- Race condition with rapid edits (multiple OSRM calls in flight) — not yet addressed
+- No user-visible feedback when routing fails (only console log)
 
 ## Next Steps
-- Phase 3: Route editing — drag waypoints on map, add/remove points, reverse route, trim with range slider
-- Phase 4: Merge routes, split routes, GPX export
-- Phase 5: localStorage persistence, recent routes, polish, GitHub Pages deploy
+- Add debouncing or request cancellation for rapid edit operations
+- Add user-visible toast notifications for routing errors
+- Consider caching OSRM responses for repeated segments
+- Phase 4 remaining: polish, GitHub Pages deploy
